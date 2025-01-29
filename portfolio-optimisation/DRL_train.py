@@ -1,17 +1,28 @@
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import load_model, Model
+from tensorflow.keras.models import Model
 import tensorflow as tf
 import matplotlib.pyplot as plt
 from tensorflow.keras.layers import Input, Dense
 
+# Check if GPU is available
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print("GPU is available and configured!")
+    except RuntimeError as e:
+        print(e)
+else:
+    print("No GPU detected. Running on CPU.")
 
 class StockEnv:
     def __init__(self, data, initial_balance=10000):
         self.data = data
         self.initial_balance = initial_balance
-        self.state_size = data.shape[1] + 3 # stock data + balance + net_worth + stock_owned
+        self.state_size = data.shape[1] + 3  # stock data + balance + net_worth + stock_owned
         self.reset()
 
     def reset(self):
@@ -27,34 +38,23 @@ class StockEnv:
 
     def step(self, action):
         current_price = self.data.iloc[self.current_step]['Close']
-        # print(current_price)
-        #print(self.net_worth)
         prev_net_worth = self.net_worth
-        if action == 0: # Buy
+
+        if action == 0:  # Buy
             if current_price <= self.balance:
                 self.stock_owned += 1
                 self.balance -= current_price
-                self.net_worth = self.balance + self.stock_owned * current_price
-        elif action == 1: # Sell
+        elif action == 1:  # Sell
             if self.stock_owned > 0:
                 self.stock_owned -= 1
                 self.balance += current_price
-                self.net_worth = self.balance + self.stock_owned * current_price
-        elif action == 2:
-            self.net_worth = self.balance + self.stock_owned * current_price
-        print(self.balance,self.stock_owned,current_price)
-
-        # Go to the next day
-        self.current_step += 1
-
-        # Calculate reward
+        
+        self.net_worth = self.balance + self.stock_owned * current_price
         reward = (self.net_worth - prev_net_worth) / prev_net_worth
-        print(reward)
-
-        # Check if done
-        done = (self.current_step == 100 - 1)
-
-        return (self._get_observation(), reward, done)
+        self.current_step += 1
+        done = self.current_step >= len(self.data) - 1
+        
+        return self._get_observation(), reward, done
 
 class ActorCritic:
     def __init__(self, state_size, action_size):
@@ -71,9 +71,8 @@ class ActorCritic:
         dense1 = Dense(32, activation='relu')(state_input)
         dense2 = Dense(32, activation='relu')(dense1)
         output = Dense(self.action_size, activation='softmax')(dense2)
-
         model = Model(inputs=state_input, outputs=output)
-        model.compile(loss='categorical_crossentropy', optimizer=tf.keras.optimizers.Adam(lr=self.learning_rate))
+        model.compile(loss='categorical_crossentropy', optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate))
         return model
 
     def build_critic(self):
@@ -81,39 +80,31 @@ class ActorCritic:
         dense1 = Dense(32, activation='relu')(state_input)
         dense2 = Dense(32, activation='relu')(dense1)
         output = Dense(1, activation='linear')(dense2)
-
         model = Model(inputs=state_input, outputs=output)
-        model.compile(loss='mean_squared_error', optimizer=tf.keras.optimizers.Adam(lr=self.learning_rate))
+        model.compile(loss='mean_squared_error', optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate))
         return model
 
     def train(self, state, action, reward, next_state, done):
         target = np.zeros((1, 1))
         advantages = np.zeros((1, self.action_size))
-
         value = self.critic.predict(state)[0]
         next_value = self.critic.predict(next_state)[0]
 
-        if done:
-            advantages[0][action] = reward - value
-            target[0][0] = reward
-        else:
-            advantages[0][action] = reward + self.gamma * next_value - value
-            target[0][0] = reward + self.gamma * next_value
+        advantages[0][action] = reward + (0 if done else self.gamma * next_value) - value
+        target[0][0] = reward + (0 if done else self.gamma * next_value)
 
-        self.actor.fit(state, advantages, epochs=1, verbose=0)
-        self.critic.fit(state, target, epochs=1, verbose=0)
+        self.actor.fit(state, advantages, epochs=1, verbose=0, batch_size=1)
+        self.critic.fit(state, target, epochs=1, verbose=0, batch_size=1)
 
     def act(self, state):
-        probabilities = self.actor.predict(state)[0]
-        action = np.random.choice(self.action_size, p=probabilities)
-        return action
+        probabilities = self.actor.predict(state, verbose=0)[0]
+        return np.random.choice(self.action_size, p=probabilities)
+
 
 def train_model(env, actor_critic, episodes=100):
     total_rewards = []
-    i = 0
     for episode in range(episodes):
-        state = env.reset()
-        state = np.reshape(state, [1, env.state_size]).astype(np.float32)
+        state = np.reshape(env.reset(), [1, env.state_size]).astype(np.float32)
         done = False
         total_reward = 0
 
@@ -126,12 +117,8 @@ def train_model(env, actor_critic, episodes=100):
             total_reward += reward
 
         total_rewards.append(total_reward)
-        print(f"Episode : {episode}, Total Reward : {total_reward}")
-        actor_critic.actor.save(f"actor{i}.h5")
-        actor_critic.critic.save(f'critic{i}.h5')
-        i+=1
+        print(f"Episode: {episode}, Total Reward: {total_reward:.4f}")
 
-    print(total_rewards)
     plt.plot(total_rewards)
     plt.title('Total Reward per Episode')
     plt.xlabel('Episode')
@@ -141,21 +128,29 @@ def train_model(env, actor_critic, episodes=100):
 
 def main():
     df = pd.read_csv('new_dataset.csv')
-    groups = list(set(df['Symbol']))
-    df.head()
-    grouped_df = df.groupby('Symbol')
-    #data = pd.read_csv('new_datset.csv')
-    data = grouped_df.get_group(groups[0])
-    data = data[['Open', 'High', 'Low', 'Close', 'SMA_20', 'SMA_50']]
+    if 'Symbol' not in df.columns:
+        raise ValueError("Dataset is missing the 'Symbol' column.")
+    
+    groups = df['Symbol'].unique()
+    selected_group = groups[0]  # Select the first stock symbol
+    data = df[df['Symbol'] == selected_group]
+    
+    required_columns = ['Open', 'High', 'Low', 'Close']
+    for col in required_columns:
+        if col not in data.columns:
+            raise ValueError(f"Missing required column: {col}")
+
+    data.loc[:, 'SMA_20'] = data['Close'].rolling(window=20).mean()
+    data.loc[:, 'SMA_50'] = data['Close'].rolling(window=50).mean()
+    data.dropna(inplace=True)
+
     scaler = MinMaxScaler()
-    data = pd.DataFrame(scaler.fit_transform(data), columns=data.columns)
+    data = pd.DataFrame(scaler.fit_transform(data[required_columns + ['SMA_20', 'SMA_50']]), columns=required_columns + ['SMA_20', 'SMA_50'])
 
     env = StockEnv(data)
-    state_size = env.state_size
-    action_size = 3 # Buy or Sell
+    actor_critic = ActorCritic(state_size=env.state_size, action_size=3)
+    train_model(env, actor_critic)
 
-    actor_critic = ActorCritic(state_size=state_size, action_size=action_size)
-    train_model(env=env, actor_critic=actor_critic)
 
 if __name__ == '__main__':
     main()

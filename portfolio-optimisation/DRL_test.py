@@ -40,14 +40,12 @@ class StockEnv:
                 self.net_worth = self.balance + self.stock_owned * current_price
         elif action == 2:
             self.net_worth = self.balance + self.stock_owned * current_price
-        print(self.balance,current_price)
 
         # Go to the next day
         self.current_step += 1
 
         # Calculate reward
         reward = (self.net_worth - prev_net_worth) / prev_net_worth
-        print(reward)
 
         # Check if done
         done = (self.current_step == 100 - 1)
@@ -71,7 +69,7 @@ class ActorCritic:
         output = Dense(self.action_size, activation='softmax')(dense2)
 
         model = Model(inputs=state_input, outputs=output)
-        model.compile(loss='categorical_crossentropy', optimizer=tf.keras.optimizers.Adam(lr=self.learning_rate))
+        model.compile(loss='categorical_crossentropy', optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate))
         return model
 
     def build_critic(self):
@@ -81,7 +79,7 @@ class ActorCritic:
         output = Dense(1, activation='linear')(dense2)
 
         model = Model(inputs=state_input, outputs=output)
-        model.compile(loss='mean_squared_error', optimizer=tf.keras.optimizers.Adam(lr=self.learning_rate))
+        model.compile(loss='mean_squared_error', optimizer=tf.keras.optimizers.Adam(learning_rate=self.learning_rate))
         return model
 
     def train(self, state, action, reward, next_state, done):
@@ -121,7 +119,7 @@ def test_model(env, actor_critic, stock):
         total_reward += reward
         total_rewards.append(total_reward)
     current_price = env.data.iloc[100]['Close']
-    profit = env.balance + (env.stock_owned*current_price) - env.initial_balance
+    profit = env.balance + (env.stock_owned * current_price) - env.initial_balance
     plt.plot(total_rewards)
     plt.title(f"{stock}\n Total Profit : {profit}")
     plt.xlabel('days')
@@ -130,12 +128,10 @@ def test_model(env, actor_critic, stock):
 
     return total_reward
 
-
 df = pd.read_csv('new_dataset.csv')
 groups = list(set(df['Symbol']))
-df.head()
 grouped_df = df.groupby('Symbol')
-#data = pd.read_csv('new_datset.csv')
+
 for i in range(5):
     data = grouped_df.get_group(groups[i])
     data = data[['Open', 'High', 'Low', 'Close']]
@@ -144,11 +140,11 @@ for i in range(5):
 
     env = StockEnv(data)
     state_size = env.state_size
-    action_size = 3 # Buy or Sell
+    action_size = 3 # Buy, Sell, Hold
 
     actor_critic = ActorCritic(state_size=state_size, action_size=action_size)
     actor_critic.actor = load_model('actor400.h5')
     actor_critic.critic = load_model('critic400.h5')
     total_reward = test_model(env=env, actor_critic=actor_critic, stock=groups[i])
     current_price = env.data.iloc[100]['Close']
-    print(f'Total Reward: {total_reward}, Profit : {env.balance + env.stock_owned*current_price}')
+    print(f'Total Reward: {total_reward}, Profit : {env.balance + env.stock_owned * current_price}')
